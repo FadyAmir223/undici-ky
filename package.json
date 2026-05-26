@@ -1,15 +1,10 @@
 {
   "name": "undici-wrapper",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "dev": "swc src -d dist --strip-leading-paths && node src/index.ts"
+    "dev": "swc src -d dist --strip-leading-paths && node dist/index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "packageManager": "pnpm@10.33.2",
   "dependencies": {
     "bottleneck": "^2.19.5",
     "p-map": "^7.0.4",
@@ -22,5 +17,6 @@
     "@types/node": "^25.9.1",
     "nodemon": "^3.1.14",
     "typescript": "^6.0.3"
-  }
+  },
+  "packageManager": "pnpm@10.33.2"
 }
