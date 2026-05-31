@@ -1,4 +1,7 @@
-import { Dispatcher } from 'undici'
+/* eslint-disable promise/prefer-await-to-then */
+/** biome-ignore-all lint/suspicious/noThenProperty: . */
+
+import type { Dispatcher } from 'undici'
 
 export class UndiciKyResponse implements Promise<Dispatcher.ResponseData> {
   readonly [Symbol.toStringTag] = 'UndiciKyResponse'
@@ -10,8 +13,9 @@ export class UndiciKyResponse implements Promise<Dispatcher.ResponseData> {
       | ((value: Dispatcher.ResponseData) => TResult1 | PromiseLike<TResult1>)
       | undefined
       | null,
+
     onrejected?:
-      | ((reason: any) => TResult2 | PromiseLike<TResult2>)
+      | ((reason: unknown) => TResult2 | PromiseLike<TResult2>)
       | undefined
       | null,
   ): Promise<TResult1 | TResult2> {
@@ -20,7 +24,7 @@ export class UndiciKyResponse implements Promise<Dispatcher.ResponseData> {
 
   catch<TResult = never>(
     onrejected?:
-      | ((reason: any) => TResult | PromiseLike<TResult>)
+      | ((reason: unknown) => TResult | PromiseLike<TResult>)
       | undefined
       | null,
   ): Promise<Dispatcher.ResponseData | TResult> {

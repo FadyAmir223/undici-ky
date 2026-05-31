@@ -1,39 +1,52 @@
-import { request, Dispatcher } from 'undici'
-import pMap, { Options as PMapOptions } from 'p-map'
 import Bottleneck from 'bottleneck'
-import { ClientOptions, NormalizedOptions, RequestOptions } from './types'
-import { UndiciKyResponse } from './response'
-import { HTTPError } from './httpError'
+import type { Options as PMapOptions } from 'p-map'
+import pMap from 'p-map'
+import type { Dispatcher } from 'undici'
+import { request } from 'undici'
+
 import catchError from '@/utils/catch-error'
 
-const calculateDelay = (retryCount: number): number => {
+import { HTTPError } from './http-error'
+import { UndiciKyResponse } from './response'
+import type { ClientOptions, NormalizedOptions, RequestOptions } from './types'
+
+const calculateDelay = (retryCount: number, backoffLimit?: number): number => {
   const baseDelay = 2 ** retryCount * 100
+  // eslint-disable-next-line sonarjs/pseudo-random
   const jitter = Math.floor(Math.random() * 50)
-  return baseDelay + jitter
+  const delay = baseDelay + jitter
+
+  if (backoffLimit) return Math.min(delay, backoffLimit)
+  return delay
 }
 
-class HttpClient {
+export class UndiciKyClient {
   private defaultOptions: ClientOptions
   private limiter?: Bottleneck
 
   constructor(options: ClientOptions = {}) {
-    this.defaultOptions = { throwHttpErrors: true, ...options }
+    this.defaultOptions = {
+      throwHttpErrors: true,
+      timeout: 10_000,
+      ...options,
+    }
+
     if (options.bottleneck) this.limiter = new Bottleneck(options.bottleneck)
   }
 
   extend(options: ClientOptions) {
-    return new HttpClient({
+    return new UndiciKyClient({
       ...this.defaultOptions,
       ...options,
       headers: { ...this.defaultOptions.headers, ...options.headers },
       hooks: {
         beforeRequest: [
-          ...(this.defaultOptions.hooks?.beforeRequest || []),
-          ...(options.hooks?.beforeRequest || []),
+          ...(this.defaultOptions.hooks?.beforeRequest ?? []),
+          ...(options.hooks?.beforeRequest ?? []),
         ],
         afterResponse: [
-          ...(this.defaultOptions.hooks?.afterResponse || []),
-          ...(options.hooks?.afterResponse || []),
+          ...(this.defaultOptions.hooks?.afterResponse ?? []),
+          ...(options.hooks?.afterResponse ?? []),
         ],
       },
     })
@@ -55,7 +68,8 @@ class HttpClient {
 
     if (options.searchParams) {
       const params = new URLSearchParams(options.searchParams as never)
-      params.forEach((value, key) => url.searchParams.append(key, value))
+      for (const [key, value] of params.entries())
+        url.searchParams.append(key, value)
     }
 
     return url
@@ -65,10 +79,9 @@ class HttpClient {
     method: Dispatcher.HttpMethod,
     options: RequestOptions,
   ): number {
-    const retries = options.retries ?? this.defaultOptions.retries ?? 3
-    if (typeof retries === 'number') return retries
+    const retry = options.retry ?? this.defaultOptions.retry
 
-    const allowedMethods = retries.methods || [
+    const allowedMethods = retry?.methods ?? [
       'GET',
       'PUT',
       'HEAD',
@@ -76,7 +89,7 @@ class HttpClient {
       'OPTIONS',
     ]
 
-    return allowedMethods.includes(method) ? (retries.limit ?? 3) : 0
+    return allowedMethods.includes(method) ? (retry?.limit ?? 3) : 0
   }
 
   private async executeRequest(
@@ -90,8 +103,24 @@ class HttpClient {
       }
     }
 
-    const beforeHooks = normalizedOpts.hooks?.beforeRequest || []
+    const beforeHooks = normalizedOpts.hooks?.beforeRequest ?? []
     for (const hook of beforeHooks) await hook(normalizedOpts)
+
+    let finalSignal =
+      normalizedOpts.signal instanceof AbortSignal
+        ? normalizedOpts.signal
+        : undefined
+
+    if (
+      normalizedOpts.timeout !== false &&
+      typeof normalizedOpts.timeout === 'number'
+    ) {
+      const timeoutSignal = AbortSignal.timeout(normalizedOpts.timeout)
+
+      finalSignal = finalSignal
+        ? AbortSignal.any([finalSignal, timeoutSignal])
+        : timeoutSignal
+    }
 
     const performRequest = () =>
       request(normalizedOpts.url, {
@@ -99,14 +128,14 @@ class HttpClient {
         headers: normalizedOpts.headers,
         body: normalizedOpts.body as never,
         dispatcher: normalizedOpts.dispatcher,
-        signal: normalizedOpts.signal,
+        signal: finalSignal,
       })
 
     const res = this.limiter
       ? await this.limiter.schedule(performRequest)
       : await performRequest()
 
-    const afterHooks = normalizedOpts.hooks?.afterResponse || []
+    const afterHooks = normalizedOpts.hooks?.afterResponse ?? []
     for (const hook of afterHooks) await hook(normalizedOpts, res)
 
     const throwErrors = normalizedOpts.throwHttpErrors ?? true
@@ -119,7 +148,7 @@ class HttpClient {
   }
 
   request(endpoint: string, options: RequestOptions = {}): UndiciKyResponse {
-    const method = options.method || 'GET'
+    const method = options.method ?? 'GET'
     const url = this.buildUrl(endpoint, options)
 
     const normalizedOpts: NormalizedOptions = {
@@ -139,19 +168,37 @@ class HttpClient {
         if (!err) return data
 
         const isHttpError = err instanceof HTTPError
+
+        const statusCodes = options.retry?.statusCodes ?? [
+          408, 413, 500, 502, 503, 504,
+        ]
+
         const retryableStatus =
-          isHttpError &&
-          [408, 413, 429, 500, 502, 503, 504].includes(err.response.statusCode)
+          isHttpError && statusCodes.includes(err.response.statusCode)
 
         if (attempt >= maxRetries || (isHttpError && !retryableStatus)) throw err
 
-        const delay = calculateDelay(attempt)
-        await new Promise((r) => setTimeout(r, delay))
+        const delay = (options.retry?.delay ?? calculateDelay)(
+          attempt,
+          options.retry?.backoffLimit,
+        )
+
+        await new Promise((resolve) => setTimeout(resolve, delay))
         attempt++
       }
     }
 
     return new UndiciKyResponse(executeWithRetry())
+  }
+
+  async batch<T, R>(
+    items: T[],
+    mapper: (item: T, index: number) => Promise<R>,
+    options?: { pMap?: PMapOptions },
+  ): Promise<R[]> {
+    const pMapOpts = options?.pMap ?? this.defaultOptions.pMap
+    if (pMapOpts) return pMap(items, mapper, pMapOpts)
+    return Promise.all(items.map((item, index) => mapper(item, index)))
   }
 
   get(endpoint: string, options?: Omit<RequestOptions, 'method'>) {
@@ -177,16 +224,9 @@ class HttpClient {
   head(endpoint: string, options?: Omit<RequestOptions, 'method'>) {
     return this.request(endpoint, { ...options, method: 'HEAD' })
   }
-
-  async batch<T, R>(
-    items: T[],
-    mapper: (item: T, index: number) => Promise<R>,
-    options?: { pMap?: PMapOptions },
-  ): Promise<R[]> {
-    const pMapOpts = options?.pMap ?? this.defaultOptions.pMap
-    if (pMapOpts) return pMap(items, mapper, pMapOpts)
-    return Promise.all(items.map((item, index) => mapper(item, index)))
-  }
 }
 
-export const createUndiciKy = (options?: ClientOptions) => new HttpClient(options)
+export const createUndiciKy = (options?: ClientOptions) =>
+  new UndiciKyClient(options)
+
+export const undiciKy = new UndiciKyClient()

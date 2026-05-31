@@ -1,11 +1,13 @@
-import { Dispatcher } from 'undici'
-import { Options as PMapOptions } from 'p-map'
-import Bottleneck from 'bottleneck'
+import type Bottleneck from 'bottleneck'
+import type { Options as PMapOptions } from 'p-map'
+import type { Dispatcher } from 'undici'
 
 export type RetryOptions = {
   limit?: number
   methods?: Dispatcher.HttpMethod[]
   statusCodes?: number[]
+  delay?: (attempt: number) => number
+  backoffLimit?: number
 }
 
 type Hooks = {
@@ -18,15 +20,17 @@ type Hooks = {
 
 export type ClientOptions = Omit<
   Dispatcher.RequestOptions,
-  'path' | 'method' | 'origin'
+  'path' | 'method' | 'origin' | 'signal'
 > & {
   prefixUrl?: string
-  retries?: number | RetryOptions
+  retry?: RetryOptions
   hooks?: Hooks
   bottleneck?: Bottleneck.ConstructorOptions
   pMap?: PMapOptions
   throwHttpErrors?: boolean
   dispatcher?: Dispatcher
+  timeout?: number | false
+  signal?: AbortSignal | null
 }
 
 export type RequestOptions = ClientOptions & {

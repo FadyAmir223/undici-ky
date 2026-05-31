@@ -1,5 +1,6 @@
-import { Dispatcher } from 'undici'
-import { NormalizedOptions } from './types'
+import type { Dispatcher } from 'undici'
+
+import type { NormalizedOptions } from './types'
 
 export class HTTPError extends Error {
   constructor(

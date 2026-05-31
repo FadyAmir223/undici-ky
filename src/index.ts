@@ -1,5 +1,5 @@
 import { Agent } from 'undici'
-import { createUndiciKy } from './modules/undici-ky/undici-ky'
+import { createUndiciKy } from './modules/undici-ky'
 
 // ############## GET ##############
 const apiGet = createUndiciKy({ prefixUrl: 'https://api-aywana.novex-dev.com' })
